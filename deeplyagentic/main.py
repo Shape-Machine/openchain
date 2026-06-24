@@ -1,7 +1,6 @@
 from deepagents import create_deep_agent
 from rich.console import Console
 from rich.markdown import Markdown
-
 from tools.outreach import get_budget_allocations, get_segments, set_budget_allocations
 from tools.sales import get_sales_actuals, get_sales_targets
 
@@ -46,3 +45,25 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+Fetch all customers
+    - For each customer:
+        - Low usage
+            - New customer
+            - Old customer
+        - Mid usage
+            - Newish customer
+            - Old customer
+        - High usage
+            - Exceeds limits
+            - Within but close to limits
+            - Distant from limits
+    - Compile report
+    - Suggested actions
+
+Tools:
+    - CRM
+    - UsageData
+
+"""

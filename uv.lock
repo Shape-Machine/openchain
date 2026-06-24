@@ -605,12 +605,14 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "deepagents" },
+    { name = "langgraph" },
     { name = "rich" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "deepagents", specifier = ">=0.6.11" },
+    { name = "langgraph", specifier = ">=1.2.6" },
     { name = "rich", specifier = ">=15.0.0" },
 ]
 
