@@ -1,3 +1,5 @@
-# Deeply Agentic Experiments
+Run riffdesk first:  uv run riffdesk/main.py
+Then run this file:  uv run agent_tools.py
 
-This is a set of deeply agentic experiments by Sri Rang.
+customer id: 1
+email: luisg@embraer.com.br
