@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "deepagents>=0.6.11",
+    "fastapi>=0.139.0",
     "langgraph>=1.2.6",
     "rich>=15.0.0",
+    "uvicorn[standard]>=0.51.0",
 ]
