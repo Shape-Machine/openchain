@@ -1,26 +1,50 @@
+import os
+
 from deepagents import create_deep_agent
 from rich.console import Console
 from rich.markdown import Markdown
 from tools.outreach import get_budget_allocations, get_segments, set_budget_allocations
 from tools.sales import get_sales_actuals, get_sales_targets
 
+os.environ.setdefault("LANGSMITH_PROJECT", "OpenChain")
+
+# google_genai:gemini-3.5-flash
 MODEL = "anthropic:claude-sonnet-4-6"
 
 SYSTEM_PROMPT = """
-Our mission is to allocate budget for outreach activities across various segments.
+Fetch all customers and for each customer:
 
-For this, we review the sales, targets, and actuals.
-
-And then adjust outreach budget accordingly.
+    1. Analyize usage and customer age
+    2. If:
+        - the usage is low and they are a new customer
+        - the usage is low and they are an old customer
+        - the usage is mid and they are a newish customer
+        - the usage is mid and they are an old customer
+        - the usage is high and they are within but close to limits
+        - the usage is high and they are distant from limits
+        - the usage is high and they exceed limits
+    3. Compile report
+    4. Suggest customer success actions:
+        - Onboard
+        - Highlight capability
+        - Highlight value
+        - Upsell
+        - Handle overage
 """
 
+SUBAGENTS = []
+
 TOOLS = [
+    # CRM
+    # DataWarehouse::Usage
     get_segments,
     get_budget_allocations,
     set_budget_allocations,
     get_sales_actuals,
     get_sales_targets,
 ]
+
+SUBAGENTS = []
 
 
 def main():
@@ -45,25 +69,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-"""
-Fetch all customers
-    - For each customer:
-        - Low usage
-            - New customer
-            - Old customer
-        - Mid usage
-            - Newish customer
-            - Old customer
-        - High usage
-            - Exceeds limits
-            - Within but close to limits
-            - Distant from limits
-    - Compile report
-    - Suggested actions
-
-Tools:
-    - CRM
-    - UsageData
-
-"""
