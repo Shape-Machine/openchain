@@ -5,6 +5,9 @@ to a customer support agent.
 Assumes chinook.sql sits next to this file: riffdesk/chinook.sql
 
 Run with:  uv run riffdesk/main.py
+
+customer id: 1
+email: luisg@embraer.com.br
 """
 
 import os
