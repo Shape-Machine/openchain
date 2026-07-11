@@ -181,6 +181,7 @@ def get_invoice(
     customer_id: int = Query(...),
     db: sqlite3.Connection = Depends(get_db),
 ) -> InvoiceDetail:
+    """Return invoice details when the invoice belongs to the customer."""
     invoice = db.execute(
         "SELECT InvoiceId, InvoiceDate, Total FROM Invoice "
         "WHERE InvoiceId = ? AND CustomerId = ?",
