@@ -1,19 +1,20 @@
 """
-Agent tools for the RiffDesk support bot — these call the riffdesk REST API
-(riffdesk/main.py) over HTTP instead of touching SQLite directly.
+RiffDesk support supervisor and specialist agents. Their tools call the
+riffdesk REST API (riffdesk/main.py) instead of touching SQLite directly.
 
 Identity is now collected via a real LangGraph interrupt: the customer_id
 and email are NOT in the initial prompt. The collect_customer_identity tool
 pauses the graph mid-execution and asks for them directly.
 
 Run riffdesk first:  uv run riffdesk/main.py
-Then run this file:  uv run agent_tools.py
+Then run this file:  uv run deeplyagentic/main.py
 
 customer id: 1
 email: luisg@embraer.com.br
 """
 
 import os
+from uuid import uuid4
 
 import httpx
 import questionary
@@ -132,50 +133,98 @@ def query_invoices(customer_id: int, limit: int = 10) -> str:
 
 # --- Tool 3: invoice line-item detail ---
 @tool
-def get_invoice_detail(invoice_id: int) -> str:
+def get_invoice_detail(customer_id: int, invoice_id: int) -> str:
     """Get line-item detail (tracks, price, quantity) for a specific invoice.
-    Use this to confirm exactly what's being refunded before filing a refund."""
+    The invoice must belong to the verified customer. Use this to confirm
+    exactly what's being refunded before filing a refund."""
     with _client() as client:
-        resp = client.get(f"/invoices/{invoice_id}")
+        resp = client.get(
+            f"/invoices/{invoice_id}", params={"customer_id": customer_id}
+        )
     if resp.status_code == 404:
-        return f"No invoice found with ID {invoice_id}."
+        return f"Invoice {invoice_id} does not belong to customer {customer_id}."
     resp.raise_for_status()
     return str(resp.json())
 
 
 # --- Tool 4: refund request (write, sensitive -> gated via interrupt_on) ---
 @tool
-def request_refund(invoice_id: int, reason: str) -> str:
+def request_refund(customer_id: int, invoice_id: int, reason: str) -> str:
     """File a refund request for a given invoice. Requires human approval
-    before it takes effect."""
+    before it takes effect. The invoice must belong to the verified customer."""
     with _client() as client:
-        resp = client.post("/refunds", json={"invoice_id": invoice_id, "reason": reason})
+        resp = client.post(
+            "/refunds",
+            json={
+                "customer_id": customer_id,
+                "invoice_id": invoice_id,
+                "reason": reason,
+            },
+        )
     if resp.status_code == 404:
-        return f"No invoice found with ID {invoice_id}; refund not filed."
+        return (
+            f"Invoice {invoice_id} does not belong to customer {customer_id}; "
+            "refund not filed."
+        )
     resp.raise_for_status()
     return str(resp.json())
 
 
-# --- Wire up the agent ---
+# --- Wire up the supervisor and specialists ---
 checkpointer = MemorySaver()  # required for human-in-the-loop
 
-agent = create_deep_agent(
-    model="anthropic:claude-sonnet-4-6",
-    tools=[collect_customer_identity, query_invoices, get_invoice_detail, request_refund],
-    system_prompt=(
-        "You are a music store support agent for RiffDesk. "
-        "Always call collect_customer_identity FIRST, before anything else, "
-        "and only proceed to query_invoices, get_invoice_detail, or "
-        "request_refund once identity has been verified successfully. "
-        "Confirm the exact invoice with the customer before filing a refund."
+purchase_specialist = {
+    "name": "purchase-specialist",
+    "description": (
+        "Read-only specialist for listing a verified customer's invoices and "
+        "explaining the tracks, prices, and quantities on a specific invoice."
     ),
-    interrupt_on={
-        # collect_customer_identity is NOT listed here — it pauses via its
-        # own direct interrupt() call, independent of interrupt_on.
-        "query_invoices": False,
+    "system_prompt": (
+        "You are RiffDesk's purchase-history specialist. Use only the verified "
+        "customer_id supplied by the supervisor. Handle recent-purchase and "
+        "invoice-detail questions with the available read-only tools. Never "
+        "perform or promise a refund. Return a concise factual answer to the "
+        "supervisor."
+    ),
+    "tools": [query_invoices, get_invoice_detail],
+}
+
+refund_specialist = {
+    "name": "refund-specialist",
+    "description": (
+        "Specialist for confirming an owned invoice and filing a refund request "
+        "after explicit human approval."
+    ),
+    "system_prompt": (
+        "You are RiffDesk's refund specialist. Use only the verified customer_id "
+        "supplied by the supervisor. First call get_invoice_detail to verify "
+        "ownership and confirm exactly what the invoice contains. Only call "
+        "request_refund when the customer's desired invoice and reason are "
+        "explicit. The request_refund tool is approval-gated. If ownership "
+        "cannot be verified, do not proceed. Return the final outcome to the "
+        "supervisor."
+    ),
+    "tools": [get_invoice_detail, request_refund],
+    "interrupt_on": {
         "get_invoice_detail": False,
         "request_refund": {"allowed_decisions": ["approve", "reject"]},
     },
+}
+
+agent = create_deep_agent(
+    model="anthropic:claude-sonnet-4-6",
+    tools=[collect_customer_identity],
+    subagents=[purchase_specialist, refund_specialist],
+    system_prompt=(
+        "You are the customer-facing support supervisor for RiffDesk. "
+        "Always call collect_customer_identity FIRST, before anything else, "
+        "and do not delegate until it succeeds. Pass the verified customer_id "
+        "and all relevant customer context in every specialist task. Delegate "
+        "purchase-history and invoice-detail work to purchase-specialist. "
+        "Delegate refunds to refund-specialist. Do not attempt specialist work "
+        "yourself, and never substitute a different customer_id. Present each "
+        "specialist's result clearly to the customer."
+    ),
     checkpointer=checkpointer,
 )
 
@@ -244,7 +293,7 @@ def _handle_interrupt_loop(result, config):
 
 
 if __name__ == "__main__":
-    config = {"configurable": {"thread_id": "demo-thread-1"}}
+    config = {"configurable": {"thread_id": f"demo-{uuid4()}"}}
 
     console.print(Panel("RiffDesk support bot — type 'exit' to quit.", style="bold green"))
 
