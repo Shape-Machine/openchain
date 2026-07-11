@@ -7,16 +7,14 @@ and email are NOT in the initial prompt. The collect_customer_identity tool
 pauses the graph mid-execution and asks for them directly.
 
 Run riffdesk first:  uv run riffdesk/main.py
-Then run this file:  uv run deeplyagentic/main.py
+Then run this module:  uv run python -m deeplyagentic.main
 
 customer id: 1
 email: luisg@embraer.com.br
 """
 
-import os
 from uuid import uuid4
 
-import httpx
 import questionary
 from deepagents import create_deep_agent
 from langchain.tools import tool
@@ -29,8 +27,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-API_BASE_URL = os.environ.get("RIFFDESK_API_URL", "http://127.0.0.1:8000")
-API_KEY = os.environ.get("RIFFDESK_API_KEY", "demo-secret-key")
+from deeplyagentic.api import api_client
+from deeplyagentic.subagents import purchase_specialist, refund_specialist
 
 console = Console()
 
@@ -67,14 +65,6 @@ class _EmailPromptValidator(Validator):
             )
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=API_BASE_URL,
-        headers={"X-API-Key": API_KEY},
-        timeout=10.0,
-    )
-
-
 # --- Tool 1: identity collection via a direct interrupt() ---
 @tool
 def collect_customer_identity() -> str:
@@ -103,7 +93,7 @@ def collect_customer_identity() -> str:
             # Turn pydantic's error into one plain-English line per field.
             error = "; ".join(f"{e['loc'][0]}: {e['msg']}" for e in exc.errors())
 
-    with _client() as client:
+    with api_client() as client:
         resp = client.get(f"/customers/{identity.customer_id}")
     if resp.status_code == 404:
         return f"No customer found with ID {identity.customer_id}. Ask the customer to try again."
@@ -119,97 +109,8 @@ def collect_customer_identity() -> str:
     )
 
 
-# --- Tool 2: order/invoice lookup (read-only) ---
-@tool
-def query_invoices(customer_id: int, limit: int = 10) -> str:
-    """Look up a verified customer's recent invoices (id, date, total)."""
-    with _client() as client:
-        resp = client.get(f"/customers/{customer_id}/invoices", params={"limit": limit})
-    if resp.status_code == 404:
-        return f"No customer found with ID {customer_id}."
-    resp.raise_for_status()
-    return str(resp.json())
-
-
-# --- Tool 3: invoice line-item detail ---
-@tool
-def get_invoice_detail(customer_id: int, invoice_id: int) -> str:
-    """Get line-item detail (tracks, price, quantity) for a specific invoice.
-    The invoice must belong to the verified customer. Use this to confirm
-    exactly what's being refunded before filing a refund."""
-    with _client() as client:
-        resp = client.get(
-            f"/invoices/{invoice_id}", params={"customer_id": customer_id}
-        )
-    if resp.status_code == 404:
-        return f"Invoice {invoice_id} does not belong to customer {customer_id}."
-    resp.raise_for_status()
-    return str(resp.json())
-
-
-# --- Tool 4: refund request (write, sensitive -> gated via interrupt_on) ---
-@tool
-def request_refund(customer_id: int, invoice_id: int, reason: str) -> str:
-    """File a refund request for a given invoice. Requires human approval
-    before it takes effect. The invoice must belong to the verified customer."""
-    with _client() as client:
-        resp = client.post(
-            "/refunds",
-            json={
-                "customer_id": customer_id,
-                "invoice_id": invoice_id,
-                "reason": reason,
-            },
-        )
-    if resp.status_code == 404:
-        return (
-            f"Invoice {invoice_id} does not belong to customer {customer_id}; "
-            "refund not filed."
-        )
-    resp.raise_for_status()
-    return str(resp.json())
-
-
 # --- Wire up the supervisor and specialists ---
 checkpointer = MemorySaver()  # required for human-in-the-loop
-
-purchase_specialist = {
-    "name": "purchase-specialist",
-    "description": (
-        "Read-only specialist for listing a verified customer's invoices and "
-        "explaining the tracks, prices, and quantities on a specific invoice."
-    ),
-    "system_prompt": (
-        "You are RiffDesk's purchase-history specialist. Use only the verified "
-        "customer_id supplied by the supervisor. Handle recent-purchase and "
-        "invoice-detail questions with the available read-only tools. Never "
-        "perform or promise a refund. Return a concise factual answer to the "
-        "supervisor."
-    ),
-    "tools": [query_invoices, get_invoice_detail],
-}
-
-refund_specialist = {
-    "name": "refund-specialist",
-    "description": (
-        "Specialist for confirming an owned invoice and filing a refund request "
-        "after explicit human approval."
-    ),
-    "system_prompt": (
-        "You are RiffDesk's refund specialist. Use only the verified customer_id "
-        "supplied by the supervisor. First call get_invoice_detail to verify "
-        "ownership and confirm exactly what the invoice contains. Only call "
-        "request_refund when the customer's desired invoice and reason are "
-        "explicit. The request_refund tool is approval-gated. If ownership "
-        "cannot be verified, do not proceed. Return the final outcome to the "
-        "supervisor."
-    ),
-    "tools": [get_invoice_detail, request_refund],
-    "interrupt_on": {
-        "get_invoice_detail": False,
-        "request_refund": {"allowed_decisions": ["approve", "reject"]},
-    },
-}
 
 agent = create_deep_agent(
     model="anthropic:claude-sonnet-4-6",

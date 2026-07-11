@@ -13,7 +13,7 @@ Run the API first:
 
 Then run the interactive support agent in another terminal:
 
-    uv run deeplyagentic/main.py
+    uv run python -m deeplyagentic.main
 
 The API defaults to `http://127.0.0.1:8000` and the demo API key
 `demo-secret-key`. Set `RIFFDESK_API_URL`, `RIFFDESK_API_KEY`, or `API_KEY` to
