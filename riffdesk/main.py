@@ -99,6 +99,7 @@ class InvoiceDetail(Invoice):
 
 
 class RefundRequestIn(BaseModel):
+    customer_id: int
     invoice_id: int
     reason: str
 
@@ -171,14 +172,19 @@ def list_invoices(
 
 
 @app.get(
-    "/invoices/{invoice_id}",
+    "/customers/{customer_id}/invoices/{invoice_id}",
     response_model=InvoiceDetail,
     dependencies=[Depends(require_api_key)],
 )
-def get_invoice(invoice_id: int, db: sqlite3.Connection = Depends(get_db)) -> InvoiceDetail:
+def get_invoice(
+    customer_id: int,
+    invoice_id: int,
+    db: sqlite3.Connection = Depends(get_db),
+) -> InvoiceDetail:
     invoice = db.execute(
-        "SELECT InvoiceId, InvoiceDate, Total FROM Invoice WHERE InvoiceId = ?",
-        (invoice_id,),
+        "SELECT InvoiceId, InvoiceDate, Total FROM Invoice "
+        "WHERE InvoiceId = ? AND CustomerId = ?",
+        (invoice_id, customer_id),
     ).fetchone()
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -213,7 +219,8 @@ def create_refund(
     body: RefundRequestIn, db: sqlite3.Connection = Depends(get_db)
 ) -> RefundRequestOut:
     invoice = db.execute(
-        "SELECT 1 FROM Invoice WHERE InvoiceId = ?", (body.invoice_id,)
+        "SELECT 1 FROM Invoice WHERE InvoiceId = ? AND CustomerId = ?",
+        (body.invoice_id, body.customer_id),
     ).fetchone()
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")

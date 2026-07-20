@@ -132,26 +132,37 @@ def query_invoices(customer_id: int, limit: int = 10) -> str:
 
 # --- Tool 3: invoice line-item detail ---
 @tool
-def get_invoice_detail(invoice_id: int) -> str:
+def get_invoice_detail(customer_id: int, invoice_id: int) -> str:
     """Get line-item detail (tracks, price, quantity) for a specific invoice.
-    Use this to confirm exactly what's being refunded before filing a refund."""
+    The invoice must belong to the verified customer. Use this to confirm
+    exactly what's being refunded before filing a refund."""
     with _client() as client:
-        resp = client.get(f"/invoices/{invoice_id}")
+        resp = client.get(f"/customers/{customer_id}/invoices/{invoice_id}")
     if resp.status_code == 404:
-        return f"No invoice found with ID {invoice_id}."
+        return f"Invoice {invoice_id} was not found for customer {customer_id}."
     resp.raise_for_status()
     return str(resp.json())
 
 
 # --- Tool 4: refund request (write, sensitive -> gated via interrupt_on) ---
 @tool
-def request_refund(invoice_id: int, reason: str) -> str:
+def request_refund(customer_id: int, invoice_id: int, reason: str) -> str:
     """File a refund request for a given invoice. Requires human approval
-    before it takes effect."""
+    before it takes effect. The invoice must belong to the verified customer."""
     with _client() as client:
-        resp = client.post("/refunds", json={"invoice_id": invoice_id, "reason": reason})
+        resp = client.post(
+            "/refunds",
+            json={
+                "customer_id": customer_id,
+                "invoice_id": invoice_id,
+                "reason": reason,
+            },
+        )
     if resp.status_code == 404:
-        return f"No invoice found with ID {invoice_id}; refund not filed."
+        return (
+            f"Invoice {invoice_id} was not found for customer {customer_id}; "
+            "refund not filed."
+        )
     resp.raise_for_status()
     return str(resp.json())
 
@@ -167,6 +178,7 @@ agent = create_deep_agent(
         "Always call collect_customer_identity FIRST, before anything else, "
         "and only proceed to query_invoices, get_invoice_detail, or "
         "request_refund once identity has been verified successfully. "
+        "Always pass the verified customer_id to every invoice or refund tool. "
         "Confirm the exact invoice with the customer before filing a refund."
     ),
     interrupt_on={
