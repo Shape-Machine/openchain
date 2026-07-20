@@ -11,25 +11,25 @@ Then run this file:  uv run agent_tools.py
 
 customer id: 1
 email: luisg@embraer.com.br
+
+{"customer_id": 1, "email": "luisg@embraer.com.br"}
+{
+   "decisions": [
+     {"type": "approve"}
+   ]
+ }
 """
 
-import os
-
-import httpx
 import questionary
-from deepagents import create_deep_agent
-from langchain.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 from prompt_toolkit.validation import ValidationError as PromptValidationError
 from prompt_toolkit.validation import Validator
-from pydantic import BaseModel, EmailStr, ValidationError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-API_BASE_URL = os.environ.get("RIFFDESK_API_URL", "http://127.0.0.1:8000")
-API_KEY = os.environ.get("RIFFDESK_API_KEY", "demo-secret-key")
+from .core import build_agent
 
 console = Console()
 
@@ -56,17 +56,9 @@ PROMPT_STYLE = questionary.Style(
 )
 
 
-# --- Validation schema for the identity-collection interrupt ---
-# This is the authoritative check: whatever a UI does upstream, the tool
-# itself never trusts raw resume data.
-class IdentityInput(BaseModel):
-    customer_id: int
-    email: EmailStr
-
-
 # --- Fast, client-side checks for the prompt itself (UX layer only) ---
-# These don't replace IdentityInput above -- they just stop obviously bad
-# input from being submitted in the first place. The tool still validates
+# These don't replace IdentityInput in core.py -- they just stop obviously
+# bad input from being submitted in the first place. The tool still validates
 # authoritatively regardless of what happens here.
 class _CustomerIdPromptValidator(Validator):
     def validate(self, document):
@@ -88,130 +80,9 @@ class _EmailPromptValidator(Validator):
             )
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=API_BASE_URL,
-        headers={"X-API-Key": API_KEY},
-        timeout=10.0,
-    )
-
-
-# --- Tool 1: identity collection via a direct interrupt() ---
-@tool
-def collect_customer_identity() -> str:
-    """Call this FIRST, before any other tool. Pauses and asks the customer
-    for their customer ID and email, then verifies identity. Returns the
-    verified customer_id to use in later tool calls."""
-    error = None
-
-    # Loop until we get a structurally valid customer_id + email. Each
-    # iteration is its own interrupt/resume — the graph pauses again with
-    # the error attached instead of ever raising or crashing.
-    while True:
-        payload = {
-            "type": "identity_request",
-            "message": "Please provide your customer ID and email to verify your identity.",
-        }
-        if error:
-            payload["error"] = error
-
-        response = interrupt(payload)
-
-        try:
-            identity = IdentityInput(**response)
-            break
-        except ValidationError as exc:
-            # Turn pydantic's error into one plain-English line per field.
-            error = "; ".join(f"{e['loc'][0]}: {e['msg']}" for e in exc.errors())
-
-    with _client() as client:
-        resp = client.get(f"/customers/{identity.customer_id}")
-    if resp.status_code == 404:
-        return f"No customer found with ID {identity.customer_id}. Ask the customer to try again."
-    resp.raise_for_status()
-    customer = resp.json()
-
-    if customer["email"].strip().lower() != identity.email.strip().lower():
-        return "Identity verification FAILED: email does not match our records. Do not proceed."
-
-    return (
-        f"Identity verified for {customer['first_name']} {customer['last_name']} "
-        f"(customer_id={identity.customer_id}). Use this customer_id for all further lookups."
-    )
-
-
-# --- Tool 2: order/invoice lookup (read-only) ---
-@tool
-def query_invoices(customer_id: int, limit: int = 10) -> str:
-    """Look up a verified customer's recent invoices (id, date, total)."""
-    with _client() as client:
-        resp = client.get(f"/customers/{customer_id}/invoices", params={"limit": limit})
-    if resp.status_code == 404:
-        return f"No customer found with ID {customer_id}."
-    resp.raise_for_status()
-    return str(resp.json())
-
-
-# --- Tool 3: invoice line-item detail ---
-@tool
-def get_invoice_detail(customer_id: int, invoice_id: int) -> str:
-    """Get line-item detail (tracks, price, quantity) for a specific invoice.
-    The invoice must belong to the verified customer. Use this to confirm
-    exactly what's being refunded before filing a refund."""
-    with _client() as client:
-        resp = client.get(f"/customers/{customer_id}/invoices/{invoice_id}")
-    if resp.status_code == 404:
-        return f"Invoice {invoice_id} was not found for customer {customer_id}."
-    resp.raise_for_status()
-    return str(resp.json())
-
-
-# --- Tool 4: refund request (write, sensitive -> gated via interrupt_on) ---
-@tool
-def request_refund(customer_id: int, invoice_id: int, reason: str) -> str:
-    """File a refund request for a given invoice. Requires human approval
-    before it takes effect. The invoice must belong to the verified customer."""
-    with _client() as client:
-        resp = client.post(
-            "/refunds",
-            json={
-                "customer_id": customer_id,
-                "invoice_id": invoice_id,
-                "reason": reason,
-            },
-        )
-    if resp.status_code == 404:
-        return (
-            f"Invoice {invoice_id} was not found for customer {customer_id}; "
-            "refund not filed."
-        )
-    resp.raise_for_status()
-    return str(resp.json())
-
-
-# --- Wire up the agent ---
-checkpointer = MemorySaver()  # required for human-in-the-loop
-
-agent = create_deep_agent(
-    model="anthropic:claude-sonnet-4-6",
-    tools=[collect_customer_identity, query_invoices, get_invoice_detail, request_refund],
-    system_prompt=(
-        "You are a music store support agent for RiffDesk. "
-        "Always call collect_customer_identity FIRST, before anything else, "
-        "and only proceed to query_invoices, get_invoice_detail, or "
-        "request_refund once identity has been verified successfully. "
-        "Always pass the verified customer_id to every invoice or refund tool. "
-        "Confirm the exact invoice with the customer before filing a refund."
-    ),
-    interrupt_on={
-        # collect_customer_identity is NOT listed here — it pauses via its
-        # own direct interrupt() call, independent of interrupt_on.
-        "query_invoices": False,
-        "get_invoice_detail": False,
-        "request_refund": {"allowed_decisions": ["approve", "reject"]},
-    },
-    checkpointer=checkpointer,
-)
+# The terminal variant owns its in-process persistence. Agent Server supplies
+# persistence separately for the Studio graph exported from studio.py.
+agent = build_agent(checkpointer=MemorySaver())
 
 
 def _prompt_decision(action: dict) -> str:

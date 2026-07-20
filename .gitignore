@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# LangGraph local development state
+.langgraph_api/
