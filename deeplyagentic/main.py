@@ -33,6 +33,28 @@ API_KEY = os.environ.get("RIFFDESK_API_KEY", "demo-secret-key")
 
 console = Console()
 
+# A restrained semantic palette: blue is RiffDesk chrome, cyan indicates an
+# active interaction, yellow is reserved for consequential actions, and red
+# is reserved for errors.
+APP_COLOR = "bright_blue"
+INTERACTION_COLOR = "cyan"
+CAUTION_COLOR = "yellow"
+ERROR_STYLE = "bold red"
+
+PROMPT_STYLE = questionary.Style(
+    [
+        ("qmark", f"fg:{INTERACTION_COLOR} bold"),
+        ("question", "bold"),
+        ("answer", f"fg:{INTERACTION_COLOR} bold"),
+        ("pointer", f"fg:{INTERACTION_COLOR} bold"),
+        ("highlighted", f"fg:{INTERACTION_COLOR} bold"),
+        ("selected", f"fg:{INTERACTION_COLOR}"),
+        ("instruction", "fg:#888888"),
+        ("text", ""),
+        ("disabled", "fg:#888888 italic"),
+    ]
+)
+
 
 # --- Validation schema for the identity-collection interrupt ---
 # This is the authoritative check: whatever a UI does upstream, the tool
@@ -200,7 +222,7 @@ def _prompt_decision(action: dict) -> str:
         Panel(
             f"[bold]{action['name']}[/bold]({action['args']})",
             title="Approval needed",
-            border_style="yellow",
+            border_style=CAUTION_COLOR,
         )
     )
     return questionary.select(
@@ -210,6 +232,7 @@ def _prompt_decision(action: dict) -> str:
             questionary.Choice("Reject", value="reject", shortcut_key="r"),
         ],
         use_shortcuts=True,
+        style=PROMPT_STYLE,
     ).ask()
 
 
@@ -223,16 +246,26 @@ def _handle_interrupt_loop(result, config):
 
         if value.get("type") == "identity_request":
             if value.get("error"):
-                console.print(f"[bold red]Error:[/bold red] {value['error']}")
-            console.print(Panel(value["message"], title="Identity verification", border_style="cyan"))
+                console.print(f"[{ERROR_STYLE}]Error:[/{ERROR_STYLE}] {value['error']}")
+            console.print(
+                Panel(
+                    value["message"],
+                    title="Identity verification",
+                    border_style=APP_COLOR,
+                )
+            )
 
             # Validators here are the fast UX layer only — IdentityInput
             # inside the tool is still the authoritative check and can
             # re-interrupt even if these somehow get bypassed.
             customer_id = questionary.text(
-                "Customer ID:", validate=_CustomerIdPromptValidator
+                "Customer ID:",
+                validate=_CustomerIdPromptValidator,
+                style=PROMPT_STYLE,
             ).ask()
-            email = questionary.text("Email:", validate=_EmailPromptValidator).ask()
+            email = questionary.text(
+                "Email:", validate=_EmailPromptValidator, style=PROMPT_STYLE
+            ).ask()
 
             result = agent.invoke(
                 Command(resume={"customer_id": customer_id, "email": email}),
@@ -258,7 +291,12 @@ def _handle_interrupt_loop(result, config):
 if __name__ == "__main__":
     config = {"configurable": {"thread_id": "demo-thread-1"}}
 
-    console.print(Panel("RiffDesk support bot — type 'exit' to quit.", style="bold green"))
+    console.print(
+        Panel(
+            "RiffDesk support bot — type 'exit' to quit.",
+            border_style=APP_COLOR,
+        )
+    )
 
     # Note: no customer_id or email in the initial prompt on purpose.
     user_input = (
@@ -266,7 +304,9 @@ if __name__ == "__main__":
     )
 
     while True:
-        with console.status("[bold cyan]Agent is thinking...[/bold cyan]"):
+        with console.status(
+            f"[bold {INTERACTION_COLOR}]Agent is thinking...[/bold {INTERACTION_COLOR}]"
+        ):
             result = agent.invoke(
                 {"messages": [{"role": "user", "content": user_input}]},
                 config=config,
@@ -275,8 +315,14 @@ if __name__ == "__main__":
 
         result = _handle_interrupt_loop(result, config)
 
-        console.print(Panel(Markdown(result.value["messages"][-1].content), title="Agent", border_style="blue"))
+        console.print(
+            Panel(
+                Markdown(result.value["messages"][-1].content),
+                title="Agent",
+                border_style=APP_COLOR,
+            )
+        )
 
-        user_input = questionary.text("You:").ask()
+        user_input = questionary.text("You:", style=PROMPT_STYLE).ask()
         if user_input is None or user_input.strip().lower() in {"exit", "quit"}:
             break
