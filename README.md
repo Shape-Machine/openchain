@@ -9,7 +9,7 @@ The support supervisor verifies the customer's identity, then delegates to:
 
 Run the API first:
 
-    uv run riffdesk/main.py
+    uv run python -m riffdesk.main
 
 Then run the interactive support agent in another terminal:
 
